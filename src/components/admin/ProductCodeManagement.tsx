@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/hooks/use-toast";
 import { Upload, CheckCircle2, XCircle } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import { supabase } from "@/lib/supabase";
+import * as XLSX from 'xlsx';
+import "./RealtimeTransitions.css";
 
 const ProductCodeManagement = () => {
   const [totalCodes, setTotalCodes] = useState(0);
@@ -11,14 +14,88 @@ const ProductCodeManagement = () => {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  useEffect(() => {
+    fetchCodeStats();
+
+    // Set up realtime subscription for product codes with granular updates
+    const channel = supabase
+      .channel('product-codes-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'product_codes',
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            // Increment total codes count
+            setTotalCodes((current) => current + 1);
+          } else if (payload.eventType === 'UPDATE') {
+            // Check if code was marked as used
+            const oldCode = payload.old as any;
+            const newCode = payload.new as any;
+            if (!oldCode.is_used && newCode.is_used) {
+              // Code was just used
+              setUsedCodes((current) => current + 1);
+            } else if (oldCode.is_used && !newCode.is_used) {
+              // Code was marked as unused (edge case)
+              setUsedCodes((current) => Math.max(0, current - 1));
+            }
+          } else if (payload.eventType === 'DELETE') {
+            // Decrement total codes
+            const deletedCode = payload.old as any;
+            setTotalCodes((current) => Math.max(0, current - 1));
+            if (deletedCode.is_used) {
+              setUsedCodes((current) => Math.max(0, current - 1));
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    // Cleanup subscription on unmount
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const fetchCodeStats = async () => {
+    try {
+      // Get total codes count
+      const { count: total, error: totalError } = await supabase
+        .from('product_codes')
+        .select('*', { count: 'exact', head: true });
+
+      if (totalError) throw totalError;
+
+      // Get used codes count
+      const { count: used, error: usedError } = await supabase
+        .from('product_codes')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_used', true);
+
+      if (usedError) throw usedError;
+
+      setTotalCodes(total || 0);
+      setUsedCodes(used || 0);
+    } catch (error) {
+      console.error('Error fetching code stats:', error);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.endsWith('.csv') && !file.name.endsWith('.xlsx')) {
+    const isCSV = file.name.endsWith('.csv');
+    const isTXT = file.name.endsWith('.txt');
+    const isXLSX = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+
+    if (!isCSV && !isTXT && !isXLSX) {
       toast({
         title: "Invalid File Type",
-        description: "Please upload a CSV or Excel file.",
+        description: "Please upload a CSV, TXT, or Excel file.",
         variant: "destructive",
       });
       return;
@@ -27,28 +104,94 @@ const ProductCodeManagement = () => {
     setUploading(true);
     setUploadProgress(0);
 
-    // Simulate file processing
-    const interval = setInterval(() => {
-      setUploadProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setUploading(false);
-          
-          // Mock: simulate adding codes
-          const newCodes = Math.floor(Math.random() * 10000) + 1000;
-          setTotalCodes((prev) => prev + newCodes);
-          
-          toast({
-            title: "Upload Successful!",
-            description: `${newCodes.toLocaleString()} product codes have been imported.`,
-          });
-          return 100;
-        }
-        return prev + 10;
-      });
-    }, 200);
+    try {
+      let codes: string[] = [];
 
-    e.target.value = "";
+      if (isXLSX) {
+        // Handle Excel files
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        
+        // Get the first sheet
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        
+        // Convert to JSON
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as string[][];
+        
+        // Extract codes from first column, skip empty rows
+        codes = jsonData
+          .map(row => String(row[0] || '').trim())
+          .filter(code => code && !code.toLowerCase().includes('code'));
+      } else {
+        // Handle CSV/TXT files
+        const text = await file.text();
+        const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+        
+        // Remove header if it exists
+        codes = lines[0].toLowerCase().includes('code') ? lines.slice(1) : lines;
+      }
+      
+      if (codes.length === 0) {
+        toast({
+          title: "Empty File",
+          description: "No product codes found in the file.",
+          variant: "destructive",
+        });
+        setUploading(false);
+        return;
+      }
+
+      // Process codes in batches to avoid overwhelming the database
+      const batchSize = 500;
+      let processed = 0;
+      let successCount = 0;
+      let duplicateCount = 0;
+
+      for (let i = 0; i < codes.length; i += batchSize) {
+        const batch = codes.slice(i, i + batchSize);
+        const codeObjects = batch.map(code => ({
+          code: code.toUpperCase(),
+          is_used: false,
+        }));
+
+        const { data, error } = await supabase
+          .from('product_codes')
+          .insert(codeObjects)
+          .select();
+
+        if (error) {
+          // Count duplicates (unique constraint violation)
+          if (error.code === '23505') {
+            duplicateCount += batch.length - (data?.length || 0);
+          } else {
+            console.error('Error inserting codes:', error);
+          }
+        }
+
+        successCount += data?.length || 0;
+        processed += batch.length;
+        setUploadProgress((processed / codes.length) * 100);
+      }
+
+      await fetchCodeStats();
+
+      toast({
+        title: "Upload Complete!",
+        description: `${successCount.toLocaleString()} codes imported. ${duplicateCount > 0 ? `${duplicateCount} duplicates skipped.` : ''}`,
+      });
+    } catch (error) {
+      console.error('Error processing file:', error);
+      toast({
+        title: "Upload Failed",
+        description: "An error occurred while processing the file.",
+        variant: "destructive",
+      });
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+      e.target.value = "";
+    }
   };
 
   return (
@@ -64,7 +207,7 @@ const ProductCodeManagement = () => {
             <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
             <p className="text-lg font-medium mb-2">Upload Product Codes</p>
             <p className="text-sm text-muted-foreground mb-4">
-              CSV or Excel file (up to 1 million codes)
+              CSV, TXT, or Excel file with codes
             </p>
             <label htmlFor="file-upload">
               <Button asChild disabled={uploading}>
@@ -76,7 +219,7 @@ const ProductCodeManagement = () => {
             <input
               id="file-upload"
               type="file"
-              accept=".csv,.xlsx"
+              accept=".csv,.txt,.xlsx,.xls"
               onChange={handleFileUpload}
               className="hidden"
               disabled={uploading}

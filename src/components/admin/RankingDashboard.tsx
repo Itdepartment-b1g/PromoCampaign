@@ -1,31 +1,124 @@
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Trophy, Medal, Award, User, ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/lib/supabase";
+import type { Influencer } from "@/types/database";
+import "./RealtimeTransitions.css";
 
-interface RankingData {
-  id: string;
-  firstName: string;
-  lastName: string;
-  code: string;
-  points: number;
+interface RankingData extends Influencer {
   redemptions: number;
 }
 
 const RankingDashboard = () => {
-  // Mock data - will be replaced with real data from backend
-  const rankings: RankingData[] = [
-    { id: "1", firstName: "Sarah", lastName: "Johnson", code: "INF-001", points: 156, redemptions: 156 },
-    { id: "2", firstName: "Mike", lastName: "Chen", code: "INF-002", points: 142, redemptions: 142 },
-    { id: "3", firstName: "Emma", lastName: "Davis", code: "INF-003", points: 128, redemptions: 128 },
-    { id: "4", firstName: "James", lastName: "Wilson", code: "INF-004", points: 95, redemptions: 95 },
-    { id: "5", firstName: "Lisa", lastName: "Anderson", code: "INF-005", points: 87, redemptions: 87 },
-    { id: "6", firstName: "Tom", lastName: "Brown", code: "INF-006", points: 72, redemptions: 72 },
-    { id: "7", firstName: "Amy", lastName: "Taylor", code: "INF-007", points: 64, redemptions: 64 },
-    { id: "8", firstName: "Chris", lastName: "Lee", code: "INF-008", points: 58, redemptions: 58 },
-    { id: "9", firstName: "Maria", lastName: "Garcia", code: "INF-009", points: 51, redemptions: 51 },
-    { id: "10", firstName: "David", lastName: "Martinez", code: "INF-010", points: 45, redemptions: 45 },
-  ];
+  const [rankings, setRankings] = useState<RankingData[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchRankings();
+
+    // Set up realtime subscriptions with granular updates
+    const influencersChannel = supabase
+      .channel('rankings-influencers-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'influencers',
+        },
+        async (payload) => {
+          if (payload.eventType === 'INSERT') {
+            // Add new influencer to rankings
+            const newInfluencer = payload.new as Influencer;
+            setRankings((current) => [...current, { ...newInfluencer, redemptions: 0 }]);
+          } else if (payload.eventType === 'UPDATE') {
+            // Update existing influencer (points changed)
+            const updatedInfluencer = payload.new as Influencer;
+            setRankings((current) =>
+              current
+                .map((rank) =>
+                  rank.id === updatedInfluencer.id
+                    ? { ...rank, ...updatedInfluencer }
+                    : rank
+                )
+                .sort((a, b) => b.points - a.points) // Re-sort by points
+            );
+          } else if (payload.eventType === 'DELETE') {
+            // Remove deleted influencer
+            setRankings((current) =>
+              current.filter((rank) => rank.id !== payload.old.id)
+            );
+          }
+        }
+      )
+      .subscribe();
+
+    const redemptionsChannel = supabase
+      .channel('rankings-redemptions-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'redemptions',
+        },
+        async (payload) => {
+          // Increment redemption count for the influencer
+          const newRedemption = payload.new as any;
+          setRankings((current) =>
+            current.map((rank) =>
+              rank.id === newRedemption.influencer_id
+                ? { ...rank, redemptions: rank.redemptions + 1 }
+                : rank
+            )
+          );
+        }
+      )
+      .subscribe();
+
+    // Cleanup subscriptions on unmount
+    return () => {
+      supabase.removeChannel(influencersChannel);
+      supabase.removeChannel(redemptionsChannel);
+    };
+  }, []);
+
+  const fetchRankings = async () => {
+    try {
+      setLoading(true);
+
+      // Fetch all influencers with their redemption counts
+      const { data: influencers, error: influencersError } = await supabase
+        .from('influencers')
+        .select('*')
+        .order('points', { ascending: false });
+
+      if (influencersError) throw influencersError;
+
+      // Fetch redemption counts for each influencer
+      const rankingsWithRedemptions = await Promise.all(
+        (influencers || []).map(async (influencer) => {
+          const { count } = await supabase
+            .from('redemptions')
+            .select('*', { count: 'exact', head: true })
+            .eq('influencer_id', influencer.id);
+
+          return {
+            ...influencer,
+            redemptions: count || 0,
+          };
+        })
+      );
+
+      setRankings(rankingsWithRedemptions);
+    } catch (error) {
+      console.error('Error fetching rankings:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const getMedalIcon = (position: number) => {
     switch (position) {
@@ -44,12 +137,11 @@ const RankingDashboard = () => {
   const maxPoints = Math.max(...rankings.map(r => r.points));
 
   const handleExport = () => {
-    // Mock export functionality
     const csv = [
       ["Rank", "Name", "Code", "Points", "Redemptions"],
       ...rankings.map((r, i) => [
         i + 1,
-        `${r.firstName} ${r.lastName}`,
+        `${r.first_name} ${r.last_name}`,
         r.code,
         r.points,
         r.redemptions,
@@ -62,9 +154,27 @@ const RankingDashboard = () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "influencer-rankings.csv";
+    a.download = `influencer-rankings-${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <p className="text-muted-foreground">Loading rankings...</p>
+      </div>
+    );
+  }
+
+  if (rankings.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-12 text-center">
+          <p className="text-muted-foreground">No influencers found. Add some influencers to see rankings.</p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -92,7 +202,7 @@ const RankingDashboard = () => {
                   </Avatar>
                   <div>
                     <p className="font-bold text-lg">
-                      {influencer.firstName} {influencer.lastName}
+                      {influencer.first_name} {influencer.last_name}
                     </p>
                     <p className="text-sm text-muted-foreground">{influencer.code}</p>
                   </div>
@@ -151,7 +261,7 @@ const RankingDashboard = () => {
                         </Avatar>
                         <div>
                           <p className="font-semibold">
-                            {influencer.firstName} {influencer.lastName}
+                            {influencer.first_name} {influencer.last_name}
                           </p>
                           <p className="text-sm text-muted-foreground">{influencer.code}</p>
                         </div>

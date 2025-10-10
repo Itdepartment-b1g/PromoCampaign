@@ -1,40 +1,107 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/hooks/use-toast";
 import { Plus, User, Copy, TrendingUp } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-
-interface Influencer {
-  id: string;
-  firstName: string;
-  lastName: string;
-  code: string;
-  profilePicture?: string;
-  points: number;
-}
+import { supabase } from "@/lib/supabase";
+import type { Influencer } from "@/types/database";
+import "../admin/RealtimeTransitions.css";
 
 const InfluencerManagement = () => {
-  const [influencers, setInfluencers] = useState<Influencer[]>([
-    { id: "1", firstName: "Sarah", lastName: "Johnson", code: "INF-001", profilePicture: "", points: 156 },
-    { id: "2", firstName: "Mike", lastName: "Chen", code: "INF-002", profilePicture: "", points: 142 },
-    { id: "3", firstName: "Emma", lastName: "Davis", code: "INF-003", profilePicture: "", points: 128 },
-  ]);
+  const [influencers, setInfluencers] = useState<Influencer[]>([]);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const generateCode = () => {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let code = "INF-";
-    for (let i = 0; i < 3; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+  useEffect(() => {
+    fetchInfluencers();
+
+    // Set up realtime subscription for influencers
+    const channel = supabase
+      .channel('influencers-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'influencers',
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            // Add new influencer to the list
+            setInfluencers((current) => [...current, payload.new as Influencer]);
+          } else if (payload.eventType === 'UPDATE') {
+            // Update existing influencer
+            setInfluencers((current) =>
+              current.map((inf) =>
+                inf.id === payload.new.id ? (payload.new as Influencer) : inf
+              )
+            );
+          } else if (payload.eventType === 'DELETE') {
+            // Remove deleted influencer
+            setInfluencers((current) =>
+              current.filter((inf) => inf.id !== payload.old.id)
+            );
+          }
+        }
+      )
+      .subscribe();
+
+    // Cleanup subscription on unmount
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const fetchInfluencers = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('influencers')
+        .select('*')
+        .order('points', { ascending: false });
+
+      if (error) throw error;
+      setInfluencers(data || []);
+    } catch (error) {
+      console.error('Error fetching influencers:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load influencers.",
+        variant: "destructive",
+      });
     }
+  };
+
+  const generateCode = async (): Promise<string> => {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let code = "";
+    let isUnique = false;
+
+    while (!isUnique) {
+      code = "INF-";
+      for (let i = 0; i < 3; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+
+      // Check if code already exists
+      const { data } = await supabase
+        .from('influencers')
+        .select('code')
+        .eq('code', code)
+        .single();
+
+      if (!data) {
+        isUnique = true;
+      }
+    }
+
     return code;
   };
 
-  const handleAddInfluencer = (e: React.FormEvent) => {
+  const handleAddInfluencer = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!firstName.trim() || !lastName.trim()) {
@@ -46,23 +113,43 @@ const InfluencerManagement = () => {
       return;
     }
 
-    const newInfluencer: Influencer = {
-      id: Date.now().toString(),
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
-      code: generateCode(),
-      points: 0,
-    };
+    setLoading(true);
 
-    setInfluencers([...influencers, newInfluencer]);
-    toast({
-      title: "Influencer Added!",
-      description: `${firstName} ${lastName} has been added with code ${newInfluencer.code}`,
-    });
-    
-    setFirstName("");
-    setLastName("");
-    setShowForm(false);
+    try {
+      const code = await generateCode();
+
+      const { data, error } = await supabase
+        .from('influencers')
+        .insert({
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          code: code,
+          points: 0,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setInfluencers([...influencers, data]);
+      toast({
+        title: "Influencer Added!",
+        description: `${firstName} ${lastName} has been added with code ${code}`,
+      });
+      
+      setFirstName("");
+      setLastName("");
+      setShowForm(false);
+    } catch (error) {
+      console.error('Error adding influencer:', error);
+      toast({
+        title: "Error",
+        description: "Failed to add influencer.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const copyCode = (code: string) => {
@@ -95,11 +182,11 @@ const InfluencerManagement = () => {
                   <div className="flex items-center gap-2">
                     <Avatar className="h-6 w-6">
                       <AvatarFallback className="bg-primary/20 text-xs text-foreground">
-                        {influencer.firstName[0]}{influencer.lastName[0]}
+                        {influencer.first_name[0]}{influencer.last_name[0]}
                       </AvatarFallback>
                     </Avatar>
                     <span className="font-medium">
-                      {influencer.firstName} {influencer.lastName}
+                      {influencer.first_name} {influencer.last_name}
                     </span>
                     <span className="text-muted-foreground">({influencer.code})</span>
                   </div>
@@ -163,7 +250,9 @@ const InfluencerManagement = () => {
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button type="submit">Add Influencer</Button>
+                <Button type="submit" disabled={loading}>
+                  {loading ? "Adding..." : "Add Influencer"}
+                </Button>
                 <Button type="button" variant="outline" onClick={() => setShowForm(false)}>
                   Cancel
                 </Button>
@@ -179,16 +268,15 @@ const InfluencerManagement = () => {
               >
                 <div className="flex items-center gap-4">
                   <Avatar className="h-12 w-12">
-                    <AvatarImage src={influencer.profilePicture} />
                     <AvatarFallback className="bg-gradient-to-br from-primary to-secondary text-white">
                       <User className="h-6 w-6" />
                     </AvatarFallback>
                   </Avatar>
                   <div>
                     <p className="font-semibold">
-                      {influencer.firstName} {influencer.lastName}
+                      {influencer.first_name} {influencer.last_name}
                     </p>
-                    <p className="text-sm text-muted-foreground">ID: {influencer.id}</p>
+                    <p className="text-sm text-muted-foreground">ID: {influencer.id.slice(0, 8)}...</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">

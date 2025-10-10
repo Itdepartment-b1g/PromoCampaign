@@ -7,6 +7,7 @@ import { toast } from "@/hooks/use-toast";
 import InfluencerManagement from "@/components/admin/InfluencerManagement";
 import ProductCodeManagement from "@/components/admin/ProductCodeManagement";
 import RankingDashboard from "@/components/admin/RankingDashboard";
+import { RealtimeIndicator } from "@/components/RealtimeIndicator";
 
 const Admin = () => {
   const navigate = useNavigate();
@@ -42,9 +43,10 @@ const Admin = () => {
       {/* Header */}
       <header className="border-b bg-gradient-to-r from-primary to-secondary p-4">
         <div className="container mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-2 text-white">
+          <div className="flex items-center gap-3 text-white">
             <Trophy className="h-8 w-8" />
             <h1 className="text-2xl font-bold">Admin Dashboard</h1>
+            <RealtimeIndicator />
           </div>
           <Button
             variant="outline"

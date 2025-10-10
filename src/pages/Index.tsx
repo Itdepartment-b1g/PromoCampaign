@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { toast } from "@/hooks/use-toast";
 import { Trophy, CheckCircle2 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { supabase } from "@/lib/supabase";
 
 const Index = () => {
   const [influencerCode, setInfluencerCode] = useState("");
@@ -25,12 +26,15 @@ const Index = () => {
 
     setLoading(true);
 
-    // Simulate validation (mock data for now)
-    setTimeout(() => {
-      const mockInfluencers = ["INF-001", "INF-002", "INF-003"];
-      const mockUsedCodes = ["PROD-USED1", "PROD-USED2"];
-      
-      if (!mockInfluencers.includes(influencerCode.toUpperCase())) {
+    try {
+      // Check if influencer code exists
+      const { data: influencer, error: influencerError } = await supabase
+        .from('influencers')
+        .select('*')
+        .eq('code', influencerCode.toUpperCase())
+        .single();
+
+      if (influencerError || !influencer) {
         toast({
           title: "Invalid Influencer Code",
           description: "The influencer code you entered does not exist.",
@@ -40,7 +44,24 @@ const Index = () => {
         return;
       }
 
-      if (mockUsedCodes.includes(productCode.toUpperCase())) {
+      // Check if product code exists and is not used
+      const { data: productCodeData, error: productCodeError } = await supabase
+        .from('product_codes')
+        .select('*')
+        .eq('code', productCode.toUpperCase())
+        .single();
+
+      if (productCodeError || !productCodeData) {
+        toast({
+          title: "Invalid Product Code",
+          description: "The product code you entered does not exist.",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      if (productCodeData.is_used) {
         toast({
           title: "Product Code Already Used",
           description: "This product code has already been redeemed.",
@@ -48,6 +69,44 @@ const Index = () => {
         });
         setLoading(false);
         return;
+      }
+
+      // Create redemption record
+      const { error: redemptionError } = await supabase
+        .from('redemptions')
+        .insert({
+          influencer_id: influencer.id,
+          product_code_id: productCodeData.id,
+        });
+
+      if (redemptionError) {
+        throw redemptionError;
+      }
+
+      // Mark product code as used
+      const { error: updateCodeError } = await supabase
+        .from('product_codes')
+        .update({
+          is_used: true,
+          used_by_influencer_id: influencer.id,
+          used_at: new Date().toISOString(),
+        })
+        .eq('id', productCodeData.id);
+
+      if (updateCodeError) {
+        throw updateCodeError;
+      }
+
+      // Increment influencer points
+      const { error: updatePointsError } = await supabase
+        .from('influencers')
+        .update({
+          points: influencer.points + 1,
+        })
+        .eq('id', influencer.id);
+
+      if (updatePointsError) {
+        throw updatePointsError;
       }
 
       // Success
@@ -58,8 +117,16 @@ const Index = () => {
       
       setInfluencerCode("");
       setProductCode("");
+    } catch (error) {
+      console.error('Redemption error:', error);
+      toast({
+        title: "Error",
+        description: "An error occurred during redemption. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
       setLoading(false);
-    }, 1500);
+    }
   };
 
   return (
