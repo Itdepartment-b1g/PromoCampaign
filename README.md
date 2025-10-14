@@ -1,73 +1,96 @@
-# Welcome to your Lovable project
+# Forge Philippines - Promo Campaign Platform
 
-## Project info
+A real-time promotional campaign management platform featuring influencer tracking, product code management, and live ranking dashboards.
 
-**URL**: https://lovable.dev/projects/282ee4a6-e50d-44e1-899b-537edaf58f99
+## Features
 
-## How can I edit this code?
+- 🏆 **Real-time Ranking Dashboard** - Track influencer performance with live updates
+- 👥 **Influencer Management** - Manage influencer profiles and assignments
+- 🎫 **Product Code Management** - Generate and track promotional codes
+- 📊 **Analytics Dashboard** - Monitor campaign performance metrics
+- 🔐 **Admin Authentication** - Secure access control for administrators
 
-There are several ways of editing your application.
+## Getting Started
 
-**Use Lovable**
+### Prerequisites
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/282ee4a6-e50d-44e1-899b-537edaf58f99) and start prompting.
+- Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
 
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+### Installation
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
+# Step 1: Clone the repository
 git clone <YOUR_GIT_URL>
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+# Step 2: Navigate to the project directory
+cd "Promo Campaign"
 
-# Step 3: Install the necessary dependencies.
-npm i
+# Step 3: Install dependencies
+npm install
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+# Step 4: Start the development server
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+### Environment Setup
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+Create a `.env` file in the root directory with your Supabase credentials:
 
-**Use GitHub Codespaces**
+```env
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
+## Technologies
 
 This project is built with:
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+- **Vite** - Fast build tool and development server
+- **TypeScript** - Type-safe JavaScript
+- **React** - UI framework
+- **shadcn-ui** - Component library
+- **Tailwind CSS** - Utility-first CSS framework
+- **Supabase** - Backend and real-time database
 
-## How can I deploy this project?
+## Project Structure
 
-Simply open [Lovable](https://lovable.dev/projects/282ee4a6-e50d-44e1-899b-537edaf58f99) and click on Share -> Publish.
+```
+src/
+├── components/
+│   ├── admin/           # Admin dashboard components
+│   │   ├── InfluencerManagement.tsx
+│   │   ├── ProductCodeManagement.tsx
+│   │   └── RankingDashboard.tsx
+│   ├── ui/              # Reusable UI components
+│   └── RealtimeIndicator.tsx
+├── pages/               # Page components
+│   ├── Admin.tsx
+│   ├── Auth.tsx
+│   └── Index.tsx
+├── lib/                 # Utilities and configurations
+│   ├── supabase.ts
+│   └── utils.ts
+└── types/               # TypeScript type definitions
+    └── database.ts
+```
 
-## Can I connect a custom domain to my Lovable project?
+## Available Scripts
 
-Yes, you can!
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm run preview` - Preview production build locally
+- `npm run lint` - Run ESLint
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+## Deployment
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+Build the project for production:
+
+```sh
+npm run build
+```
+
+The `dist` folder will contain the production-ready files that can be deployed to any static hosting service.
+
+## License
+
+© 2025 Forge Philippines. All rights reserved.
