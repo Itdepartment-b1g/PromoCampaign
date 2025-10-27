@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/hooks/use-toast";
-import { Trophy, CheckCircle2 } from "lucide-react";
+import { Trophy, CheckCircle2, LogOut, User } from "lucide-react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 
@@ -11,9 +11,37 @@ const Index = () => {
   const [influencerCode, setInfluencerCode] = useState("");
   const [productCode, setProductCode] = useState("");
   const [loading, setLoading] = useState(false);
+  const [userSession, setUserSession] = useState<any>(null);
+
+  // Check if user is logged in
+  useEffect(() => {
+    const session = localStorage.getItem("userSession");
+    if (session) {
+      setUserSession(JSON.parse(session));
+    }
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem("userSession");
+    setUserSession(null);
+    toast({
+      title: "Logged out",
+      description: "You have been successfully logged out.",
+    });
+  };
 
   const handleRedeem = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Check if user is logged in as consumer
+    if (!userSession || userSession.type !== "consumer") {
+      toast({
+        title: "Login Required",
+        description: "You must be logged in as a consumer to redeem codes.",
+        variant: "destructive",
+      });
+      return;
+    }
     
     if (!influencerCode.trim() || !productCode.trim()) {
       toast({
@@ -71,12 +99,17 @@ const Index = () => {
         return;
       }
 
-      // Create redemption record
+      // Create redemption record with consumer information
       const { error: redemptionError } = await supabase
         .from('redemptions')
         .insert({
           influencer_id: influencer.id,
           product_code_id: productCodeData.id,
+          consumer_id: userSession.id,
+          consumer_info: {
+            name: userSession.name,
+            redeemed_at: new Date().toISOString()
+          }
         });
 
       if (redemptionError) {
@@ -97,17 +130,38 @@ const Index = () => {
         throw updateCodeError;
       }
 
-      // Increment influencer points
-      const { error: updatePointsError } = await supabase
+      // Increment influencer points and consumer count
+      const { error: updateInfluencerError } = await supabase
         .from('influencers')
         .update({
           points: influencer.points + 1,
+          consumer_count: influencer.consumer_count + 1,
         })
         .eq('id', influencer.id);
 
-      if (updatePointsError) {
-        throw updatePointsError;
+      if (updateInfluencerError) {
+        throw updateInfluencerError;
       }
+
+      // Increment consumer redeemed codes count
+      const { error: updateConsumerError } = await supabase
+        .from('consumers')
+        .update({
+          redeemed_codes_count: userSession.redeemedCount + 1,
+        })
+        .eq('id', userSession.id);
+
+      if (updateConsumerError) {
+        throw updateConsumerError;
+      }
+
+      // Update local session
+      const updatedSession = {
+        ...userSession,
+        redeemedCount: userSession.redeemedCount + 1
+      };
+      localStorage.setItem("userSession", JSON.stringify(updatedSession));
+      setUserSession(updatedSession);
 
       // Success
       toast({
@@ -137,11 +191,45 @@ const Index = () => {
           <Trophy className="h-8 w-8" />
           <h1 className="text-2xl font-bold">Campaign Tracker</h1>
         </div>
-        <Link to="/auth">
-          <Button variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20">
-            Admin Login
-          </Button>
-        </Link>
+        <div className="flex items-center gap-4">
+          {userSession ? (
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 text-white">
+                <User className="h-4 w-4" />
+                <span className="text-sm">{userSession.name}</span>
+                <span className="text-xs bg-white/20 px-2 py-1 rounded">
+                  {userSession.type === "consumer" ? "Consumer" : "Influencer"}
+                </span>
+              </div>
+              <Button 
+                variant="outline" 
+                className="bg-white/10 border-white/20 text-white hover:bg-white/20"
+                onClick={handleLogout}
+              >
+                <LogOut className="h-4 w-4 mr-2" />
+                Logout
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Link to="/login">
+                <Button variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20">
+                  Login
+                </Button>
+              </Link>
+              <Link to="/register/consumer">
+                <Button variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20">
+                  Register
+                </Button>
+              </Link>
+            </div>
+          )}
+          <Link to="/auth">
+            <Button variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20">
+              Admin
+            </Button>
+          </Link>
+        </div>
       </header>
 
       {/* Main Content */}
@@ -153,51 +241,81 @@ const Index = () => {
             </div>
             <CardTitle className="text-3xl">Redeem Your Product</CardTitle>
             <CardDescription>
-              Enter your influencer code and product code to claim your reward
+              {userSession && userSession.type === "consumer" 
+                ? `Welcome ${userSession.name}! Enter your codes to claim your reward`
+                : "Login as a consumer to redeem product codes"
+              }
             </CardDescription>
+            {userSession && userSession.type === "consumer" && (
+              <div className="bg-primary/10 p-3 rounded-lg">
+                <p className="text-sm text-primary font-medium">
+                  Codes Redeemed: {userSession.redeemedCount}
+                </p>
+              </div>
+            )}
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleRedeem} className="space-y-4">
-              <div className="space-y-2">
-                <label htmlFor="influencer-code" className="text-sm font-medium">
-                  Influencer Code
-                </label>
-                <Input
-                  id="influencer-code"
-                  placeholder="e.g. INF-001"
-                  value={influencerCode}
-                  onChange={(e) => setInfluencerCode(e.target.value)}
-                  className="h-12"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Enter the code provided by your influencer
-                </p>
-              </div>
+            {userSession && userSession.type === "consumer" ? (
+              <form onSubmit={handleRedeem} className="space-y-4">
+                <div className="space-y-2">
+                  <label htmlFor="influencer-code" className="text-sm font-medium">
+                    Influencer Code
+                  </label>
+                  <Input
+                    id="influencer-code"
+                    placeholder="e.g. INF-001"
+                    value={influencerCode}
+                    onChange={(e) => setInfluencerCode(e.target.value)}
+                    className="h-12"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Enter the code provided by your influencer
+                  </p>
+                </div>
 
-              <div className="space-y-2">
-                <label htmlFor="product-code" className="text-sm font-medium">
-                  Product Code
-                </label>
-                <Input
-                  id="product-code"
-                  placeholder="e.g. PROD-12345"
-                  value={productCode}
-                  onChange={(e) => setProductCode(e.target.value)}
-                  className="h-12"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Found on your product packaging
-                </p>
-              </div>
+                <div className="space-y-2">
+                  <label htmlFor="product-code" className="text-sm font-medium">
+                    Product Code
+                  </label>
+                  <Input
+                    id="product-code"
+                    placeholder="e.g. PROD-12345"
+                    value={productCode}
+                    onChange={(e) => setProductCode(e.target.value)}
+                    className="h-12"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Found on your product packaging
+                  </p>
+                </div>
 
-              <Button
-                type="submit"
-                className="w-full h-12 text-base"
-                disabled={loading}
-              >
-                {loading ? "Validating..." : "Redeem Product"}
-              </Button>
-            </form>
+                <Button
+                  type="submit"
+                  className="w-full h-12 text-base"
+                  disabled={loading}
+                >
+                  {loading ? "Validating..." : "Redeem Product"}
+                </Button>
+              </form>
+            ) : (
+              <div className="text-center space-y-4">
+                <p className="text-muted-foreground">
+                  You need to be logged in as a consumer to redeem product codes.
+                </p>
+                <div className="space-y-2">
+                  <Link to="/login" className="block">
+                    <Button className="w-full h-12 text-base">
+                      Login as Consumer
+                    </Button>
+                  </Link>
+                  <Link to="/register/consumer" className="block">
+                    <Button variant="outline" className="w-full h-12 text-base">
+                      Register as Consumer
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
